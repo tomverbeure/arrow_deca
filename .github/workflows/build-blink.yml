@@ -1,0 +1,80 @@
+name: Build Tutorials Example
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-tutorials-job:
+    name: Build ${{matrix.example}} with Quartus-${{matrix.qver}}
+    strategy:
+      matrix:
+        qver: [c5-20_720]
+        example: ['blink']
+      fail-fast: false
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: apt-get install
+        run: |
+          sudo apt-get update && sudo apt-get install -y expect
+
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Get Quartus
+        run: docker pull ghcr.io/morriganr/quartus-inst-${{matrix.qver}}:latest
+
+      - name: Install Quartus
+        run: |
+          docker create -ti --name qsrc ghcr.io/morriganr/quartus-inst-${{matrix.qver}}:latest bash
+          echo "# get files" && docker cp qsrc:qinst .
+          echo "# rem docker"
+          docker rm -f qsrc
+          docker rmi -f ghcr.io/morriganr/quartus-inst-${{matrix.qver}}
+          echo "# start install"
+          cd ./qinst
+          Q_INST_DIR=/home/runner/work/intelFPGA_lite
+          # https://www.intel.com/content/www/us/en/programmable/quartushelp/13.0/mergedProjects/global/install/install_pro_sw_command.htm
+          # mode: qt gtk xwindow text unattended
+          Q_INST_MODE="unattended"
+          Q_INST_FILE=$( pwd )/$( ls Quartus*.run )
+          chmod +x $Q_INST_FILE
+          ../.github/workflows/play-setup.sh $Q_INST_FILE $Q_INST_MODE $Q_INST_DIR
+          echo "# rem files"
+          cd ../
+          rm -rf ./qinst
+
+      - name: Build ${{matrix.example}} 
+        run: |
+          export Q_INST_DIR=/home/runner/work/intelFPGA_lite
+          export QUARTUS_ROOTDIR=${Q_INST_DIR}/quartus
+          export QUARTUS_ROOTDIR_OVERRIDE=${Q_INST_DIR}/quartus
+          export SOPC_KIT_NIOS2=${Q_INST_DIR}/nios2eds
+          export PATH=${Q_INST_DIR}/quartus/sopc_builder/bin/:$PATH
+          export PATH=${Q_INST_DIR}/quartus/bin/:$PATH
+          export PATH=${Q_INST_DIR}/nios2eds/:$PATH
+          export PATH=${Q_INST_DIR}/nios2eds/bin/:$PATH
+          export PATH=${Q_INST_DIR}/nios2eds/sdk2/bin/:$PATH
+          export PATH=${Q_INST_DIR}/nios2eds/bin/gnu/H-x86_64-pc-linux-gnu/bin/:$PATH
+          export PATH=${Q_INST_DIR}/quartus/linux64/gnu/:$PATH
+          export QUARTUS_64BIT=1
+          set -x
+          quartus_sh --version
+          cd quartus
+          pwd
+          ls -la
+          quartus_sh --flow compile ${{matrix.example}} || :
+          quartus_cpf -c -o bitstream_compression=on output_files/${{matrix.example}}.sof output_files/${{matrix.example}}.rbf || :
+          tar -cvzf ${{matrix.example}}.tgz ./output_files
+          ls -la
+
+      - name: Push artifact ${{matrix.example}}-${{matrix.qver}}.tgz
+        uses: actions/upload-artifact@v2.2.4
+        with:
+          name: ${{matrix.example}}-${{matrix.qver}}.tgz
+          path: ./quartus/${{matrix.example}}.tgz
+          retention-days: 2
